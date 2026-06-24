@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "raman-dashboard"
+version = "0.1.0"
+description = "Interactive marimo dashboard for Raman microscopy .rs maps (visualisation + MCR-ALS)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Mehr Research" }]
+dependencies = [
+    "marimo>=0.9",
+    "matplotlib>=3.8",
+    "numpy>=1.26",
+    "seaborn>=0.13",
+]
+
+[project.scripts]
+raman-dashboard = "raman_dashboard.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/raman_dashboard"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/raman_dashboard/Map_LZ-18N_100x.rs" = "raman_dashboard/Map_LZ-18N_100x.rs"
+
+[tool.hatch.build.targets.sdist]
+include = ["src/raman_dashboard"]
