@@ -17,7 +17,9 @@ def main() -> int:
     from marimo._cli.cli import main as marimo_main
 
     notebook = _notebook_path()
-    sys.argv = ["marimo", "run", str(notebook), *sys.argv[1:]]
+    # --sandbox runs the notebook in a venv built from its inline script
+    # metadata, and passing it explicitly skips marimo's confirmation prompt.
+    sys.argv = ["marimo", "run", "--sandbox", str(notebook), *sys.argv[1:]]
     return marimo_main()
 
 
