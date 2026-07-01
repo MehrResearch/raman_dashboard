@@ -25,6 +25,13 @@ Extra arguments are forwarded to `marimo run`, e.g.:
 uvx --from git+https://github.com/MehrResearch/raman_dashboard raman-dashboard --port 2718 --headless
 ```
 
+To open it in the marimo **editor** instead (edit cells, tweak code), use the
+`raman-dashboard-edit` command:
+
+```bash
+uvx --from git+https://github.com/MehrResearch/raman_dashboard raman-dashboard-edit
+```
+
 ## What it does
 
 - Loads `.rs` Raman maps and single-point scans via the bundled

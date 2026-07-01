@@ -19,6 +19,7 @@ dependencies = [
 
 [project.scripts]
 raman-dashboard = "raman_dashboard.cli:main"
+raman-dashboard-edit = "raman_dashboard.cli:edit"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/raman_dashboard"]
