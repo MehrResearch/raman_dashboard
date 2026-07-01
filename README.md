@@ -8,14 +8,11 @@ switches to a spectra view automatically.
 
 ## Run it
 
-No clone needed — launch straight from GitHub with [uv](https://docs.astral.sh/uv/):
+Download [uv](https://docs.astral.sh/uv/) then:
 
 ```bash
 # with uvx
 uvx --from git+https://github.com/MehrResearch/raman_dashboard raman-dashboard
-
-# or with uv run
-uv run --from git+https://github.com/MehrResearch/raman_dashboard raman-dashboard
 ```
 
 This opens the dashboard (`marimo run`) in your browser. A small sample map is
