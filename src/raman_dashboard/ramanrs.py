@@ -31,6 +31,19 @@ Quick start
     components = cleaned.mcr_als(n_components=3)
     fig, ax = m.plot(overlay=components.heatmap(0))
 
+Files acquired as spot measurements rather than as maps contain one or
+more single-point scans instead of (or alongside) RamanMaps:
+
+    ds = ramanrs.read("Serine deposited Al.rs")
+    s = ds.scans[0]                # first RamanScan
+    counts = s.counts             # detector counts (n_pixels,)
+    shift  = s.raman_shift         # Raman shift axis in cm^-1
+    fig, ax = s.plot()             # plot the spectrum
+    peak = s.band((1000, 1100))    # aggregate a spectral window to a scalar
+
+Each RamanScan carries its own pixel -> wavelength -> Raman-shift
+calibration (in ``RamanScan.functions``), independent of any map.
+
 NumPy is used for numeric arrays; plotting (``plot``, ``optical_image``)
 uses Matplotlib.
 
@@ -61,6 +74,7 @@ __all__ = [
     "decode_dotnet_array",
     "Dataset",
     "RamanMap",
+    "RamanScan",
     "RamanHeatmap",
     "RamanComponents",
     "remove_cosmics",
@@ -615,6 +629,89 @@ def mcr_als(
     )
 
 
+class _SpectralCalibration:
+    """Mixin: pixel -> wavelength -> Raman-shift axes from stored functions.
+
+    Consumers must provide ``functions`` (a list of function definitions) and
+    ``n_pixels`` (the number of camera pixels per spectrum). Only the two
+    calibration functions are used; other stored functions are ignored.
+    """
+
+    def _function(self, type_name: str) -> Optional[dict]:
+        for f in self.functions:
+            if f.get("Type") == type_name:
+                return f
+        return None
+
+    @property
+    def pixel(self):
+        """Camera pixel indices 0..n_pixels-1 (the stored domain axis)."""
+        n = self.n_pixels
+        if n is None:
+            return None
+        return np.arange(n)
+
+    @property
+    def wavelength_coefficients(self):
+        """Polynomial coefficients c such that lambda(p) = sum c[k] * p**k."""
+        f = self._function("PolynomialFitCalibrationFunction")
+        if f is None or "SerialisedCoefficients" not in f:
+            return None
+        return decode_dotnet_array(f["SerialisedCoefficients"])
+
+    @property
+    def wavelength(self):
+        """Wavelength axis in nm, from the stored polynomial calibration."""
+        coeffs = self.wavelength_coefficients
+        n = self.n_pixels
+        if coeffs is None or n is None:
+            return None
+        p = np.arange(n, dtype=float)
+        return np.polynomial.polynomial.polyval(p, np.asarray(coeffs))
+
+    @property
+    def laser_wavelength(self) -> Optional[float]:
+        """Nominal laser wavelength in nm, if recorded."""
+        f = self._function("LaserLineCalibrationFunction")
+        return None if f is None else f.get("Laser")
+
+    @property
+    def raman_shift(self):
+        """Raman shift axis in cm^-1: offset - 1e7 / wavelength(nm).
+
+        The offset is the calibrated laser-line wavenumber stored in the
+        file's LaserLineCalibrationFunction. Note the axis decreases with
+        pixel index on this instrument; sort or flip as needed.
+        """
+        f = self._function("LaserLineCalibrationFunction")
+        wl = self.wavelength
+        if f is None or wl is None:
+            return None
+        offset = f.get("Offset")
+        if offset is None:
+            laser = f.get("Laser")
+            if not laser:
+                return None
+            offset = 1e7 / laser
+        return offset - 1e7 / wl
+
+    def _spectral_axis(self, axis: str):
+        axes = {
+            "raman_shift": (self.raman_shift, "cm$^{-1}$", "cm^-1"),
+            "wavelength": (self.wavelength, "nm", "nm"),
+            "pixel": (self.pixel, "pixel", "pixel"),
+        }
+        try:
+            values, label, unit = axes[axis]
+        except KeyError:
+            raise ValueError(
+                f"axis must be one of {sorted(axes)}, not {axis!r}"
+            ) from None
+        if values is None:
+            raise RSFormatError(f"no {axis} calibration available")
+        return np.asarray(values, dtype=float), label, unit
+
+
 class Point:
     """A single measured point of a map: one spectrum plus its metadata."""
 
@@ -695,7 +792,7 @@ class Point:
         return f"<Point {self.label!r}, {self.n_pixels} pixels>"
 
 
-class RamanMap:
+class RamanMap(_SpectralCalibration):
     """A Raman map: an optical image plus spectra on a grid of points."""
 
     def __init__(self, node: dict):
@@ -760,12 +857,6 @@ class RamanMap:
         ``LaserLineCalibrationFunction``) to construct spectral axes.
         """
         return self._node.get("MapFunctions", [])
-
-    def _function(self, type_name: str) -> Optional[dict]:
-        for f in self.functions:
-            if f.get("Type") == type_name:
-                return f
-        return None
 
     # -- optical image ------------------------------------------------------
 
@@ -864,60 +955,6 @@ class RamanMap:
                 f"grid {ny}x{nx} does not match {len(self._points)} points"
             )
         return self.spectra.reshape(ny, nx, -1)
-
-    # -- spectral axes ----------------------------------------------------------
-
-    @property
-    def pixel(self):
-        """Camera pixel indices 0..n_pixels-1 (the stored domain axis)."""
-        n = self.n_pixels
-        if n is None:
-            return None
-        return np.arange(n)
-
-    @property
-    def wavelength_coefficients(self):
-        """Polynomial coefficients c such that lambda(p) = sum c[k] * p**k."""
-        f = self._function("PolynomialFitCalibrationFunction")
-        if f is None or "SerialisedCoefficients" not in f:
-            return None
-        return decode_dotnet_array(f["SerialisedCoefficients"])
-
-    @property
-    def wavelength(self):
-        """Wavelength axis in nm, from the stored polynomial calibration."""
-        coeffs = self.wavelength_coefficients
-        n = self.n_pixels
-        if coeffs is None or n is None:
-            return None
-        p = np.arange(n, dtype=float)
-        return np.polynomial.polynomial.polyval(p, np.asarray(coeffs))
-
-    @property
-    def laser_wavelength(self) -> Optional[float]:
-        """Nominal laser wavelength in nm, if recorded."""
-        f = self._function("LaserLineCalibrationFunction")
-        return None if f is None else f.get("Laser")
-
-    @property
-    def raman_shift(self):
-        """Raman shift axis in cm^-1: offset - 1e7 / wavelength(nm).
-
-        The offset is the calibrated laser-line wavenumber stored in the
-        file's LaserLineCalibrationFunction. Note the axis decreases with
-        pixel index on this instrument; sort or flip as needed.
-        """
-        f = self._function("LaserLineCalibrationFunction")
-        wl = self.wavelength
-        if f is None or wl is None:
-            return None
-        offset = f.get("Offset")
-        if offset is None:
-            laser = f.get("Laser")
-            if not laser:
-                return None
-            offset = 1e7 / laser
-        return offset - 1e7 / wl
 
     # -- physical geometry ----------------------------------------------------
     #
@@ -1142,22 +1179,6 @@ class RamanMap:
             **kwargs,
         )
 
-    def _spectral_axis(self, axis: str):
-        axes = {
-            "raman_shift": (self.raman_shift, "cm$^{-1}$", "cm^-1"),
-            "wavelength": (self.wavelength, "nm", "nm"),
-            "pixel": (self.pixel, "pixel", "pixel"),
-        }
-        try:
-            values, label, unit = axes[axis]
-        except KeyError:
-            raise ValueError(
-                f"axis must be one of {sorted(axes)}, not {axis!r}"
-            ) from None
-        if values is None:
-            raise RSFormatError(f"no {axis} calibration available")
-        return np.asarray(values, dtype=float), label, unit
-
     # -- optical image as pixels & plotting -----------------------------------
 
     def optical_image(self):
@@ -1355,6 +1376,141 @@ class _ProcessedRamanMap(RamanMap):
         return int(self._spectra.shape[1])
 
 
+class RamanScan(_SpectralCalibration):
+    """A single-point Raman scan: one spectrum with its own calibration.
+
+    Unlike a :class:`Point`, which is one location of a :class:`RamanMap` and
+    borrows the map's shared calibration, a scan is a stand-alone
+    ``Measurement`` that carries its own ``Functions`` (the pixel ->
+    wavelength -> Raman-shift calibration). Files acquired as spot
+    measurements rather than as maps contain one or more of these.
+    """
+
+    def __init__(self, node: dict):
+        self._node = node
+
+    @property
+    def raw(self) -> dict:
+        """Raw tree node for this scan."""
+        return self._node
+
+    @property
+    def label(self) -> str:
+        return self._node.get("Label", "")
+
+    @property
+    def metadata(self) -> dict:
+        """Acquisition metadata (laser, grating, exposure, stage X/Y/Z, …)."""
+        return self._node.get("Metadata", {})
+
+    @property
+    def position(self) -> tuple:
+        """(x, y, z) stage coordinates in micrometres, where present."""
+        md = self.metadata
+        return (md.get("X"), md.get("Y"), md.get("Z"))
+
+    @property
+    def functions(self) -> list:
+        """Calibration / post-processing function definitions, as stored.
+
+        Only the two calibration entries (``PolynomialFitCalibrationFunction``
+        and ``LaserLineCalibrationFunction``) are used, to build spectral axes;
+        the rest (cropping, background removal, …) are returned verbatim and
+        are not applied.
+        """
+        return self._node.get("Functions", [])
+
+    @property
+    def n_pixels(self) -> Optional[int]:
+        """Number of camera pixels in the spectrum."""
+        axes = self._node.get("DomainAxes") or []
+        if axes and axes[0].get("NumberOfPoints") is not None:
+            return axes[0].get("NumberOfPoints")
+        if "SerialisedData" in self._node:
+            return int(decode_dotnet_array(self._node["SerialisedData"]).shape[0])
+        return None
+
+    @property
+    def counts(self):
+        """Detector counts for this spectrum, one value per camera pixel."""
+        return decode_dotnet_array(self._node["SerialisedData"])
+
+    @property
+    def spectrum(self):
+        """Alias for :attr:`counts`."""
+        return self.counts
+
+    def band(
+        self,
+        window: tuple,
+        *,
+        axis: str = "raman_shift",
+        agg: Union[str, Callable] = "mean",
+    ) -> float:
+        """Aggregate the spectrum inside a spectral window to a scalar.
+
+        ``window`` is ``(low, high)`` on ``axis`` (``"raman_shift"``,
+        ``"wavelength"`` or ``"pixel"``); ``agg`` is one of ``"mean"``,
+        ``"sum"``, ``"max"``, ``"min"``, ``"median"`` or a callable.
+        """
+        axis_values, _, axis_unit = self._spectral_axis(axis)
+        lo, hi = sorted(float(v) for v in window)
+        mask = (axis_values >= lo) & (axis_values <= hi)
+        if not mask.any():
+            raise ValueError(
+                f"window {lo:g}..{hi:g} {axis_unit} is outside the {axis} axis "
+                f"({float(axis_values.min()):.1f}..{float(axis_values.max()):.1f})"
+            )
+        selected = self.counts[mask].astype(float)
+        if callable(agg):
+            return float(agg(selected))
+        reducers = {
+            "mean": np.mean,
+            "sum": np.sum,
+            "max": np.max,
+            "min": np.min,
+            "median": np.median,
+        }
+        try:
+            reducer = reducers[agg]
+        except KeyError:
+            names = ", ".join(sorted(reducers))
+            raise ValueError(f"unknown agg {agg!r}; use one of {names}") from None
+        return float(reducer(selected))
+
+    def plot(self, x: str = "raman_shift", ax=None, **kwargs):
+        """Plot this spectrum. ``x`` is "raman_shift", "wavelength" or "pixel".
+
+        Extra keyword arguments are passed to ``Axes.plot``. Returns
+        ``(figure, axes)``. Requires Matplotlib.
+        """
+        labels = {
+            "raman_shift": "Raman shift (cm$^{-1}$)",
+            "wavelength": "Wavelength (nm)",
+            "pixel": "Camera pixel",
+        }
+        if x not in labels:
+            raise ValueError(f"x must be one of {sorted(labels)}, not {x!r}")
+        counts = self.counts
+        if x == "pixel":
+            xs = np.arange(len(counts))
+        else:
+            xs = getattr(self, x)
+            if xs is None:
+                raise RSFormatError(f"no {x} calibration available")
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(8, 4))
+        else:
+            fig = ax.figure
+        kwargs.setdefault("linewidth", 1)
+        ax.plot(xs, counts, **kwargs)
+        ax.set(xlabel=labels[x], ylabel="Counts", title=self.label)
+        return fig, ax
+
+    def __repr__(self) -> str:
+        return f"<RamanScan {self.label!r}: {self.n_pixels} pixels>"
+
+
 class Dataset:
     """Top-level contents of an .rs file."""
 
@@ -1367,6 +1523,11 @@ class Dataset:
             RamanMap(m)
             for m in self._root.get("MeasurementList", [])
             if m.get("Type") == "RamanMap"
+        ]
+        self.scans = [
+            RamanScan(m)
+            for m in self._root.get("MeasurementList", [])
+            if m.get("Type") == "Measurement"
         ]
         self.measurements = self._root.get("MeasurementList", [])
 
@@ -1388,7 +1549,13 @@ class Dataset:
         return self._root.get("Metadata", {})
 
     def __repr__(self) -> str:
-        return f"<Dataset {self.title!r}: {len(self.maps)} map(s)>"
+        parts = []
+        if self.maps:
+            parts.append(f"{len(self.maps)} map(s)")
+        if self.scans:
+            parts.append(f"{len(self.scans)} scan(s)")
+        summary = ", ".join(parts) if parts else "empty"
+        return f"<Dataset {self.title!r}: {summary}>"
 
 
 def read(source: Union[str, bytes, BinaryIO]) -> Dataset:
@@ -1411,3 +1578,5 @@ if __name__ == "__main__":
             print(f"  {m!r}")
             for k, v in m.metadata.items():
                 print(f"    {k}: {v}")
+        for s in ds.scans:
+            print(f"  {s!r}")
