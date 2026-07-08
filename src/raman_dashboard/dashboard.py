@@ -283,6 +283,15 @@ def _():
         )
 
 
+    _optical_image_cache = {}
+
+    def _cached_optical_image(raman_map):
+        _key = id(raman_map)
+        if _key not in _optical_image_cache:
+            _optical_image_cache[_key] = raman_map.optical_image()
+        return _optical_image_cache[_key]
+
+
     def plot_map_overlay(
         raman_map,
         overlay,
@@ -295,7 +304,7 @@ def _():
     ):
         """Plot an overlay whose grid may be spatially cropped."""
         image_extent = raman_map.image_extent
-        image = raman_map.optical_image()
+        image = _cached_optical_image(raman_map)
         image_x0, image_x1, image_y0, image_y1 = image_extent
         grid_x0, grid_x1, grid_y0, grid_y1 = overlay_extent
 
@@ -396,11 +405,9 @@ def _(mo):
 def _(
     crop_grid,
     dataset,
-    get_band_window,
     grid_extent_for_points,
     map_slider,
     np,
-    set_band_window,
 ):
     if dataset.maps:
         current_map = dataset.maps[map_slider.value]
@@ -411,8 +418,24 @@ def _(
         default_band_high = min(shift_max, 1650.0)
         if default_band_low >= default_band_high:
             default_band_low, default_band_high = shift_min, min(shift_max, shift_min + 100)
+
+        _map_spectra = current_map.spectra
+        _metadata_shape = current_map.shape
+        _n_points = int(_map_spectra.shape[0])
+        if _metadata_shape is not None and int(np.prod(_metadata_shape)) == _n_points:
+            _grid_shape = tuple(int(v) for v in _metadata_shape)
+        else:
+            # Some .rs files report the planned map dimensions while storing only
+            # acquired points. Infer the actual row/column grid from X coordinates
+            # so reshape/cropping remains valid.
+            _x_coords = np.asarray(current_map.x, dtype=float)
+            _nx = len(np.unique(_x_coords)) if _x_coords.size else 0
+            if _nx and _n_points % _nx == 0:
+                _grid_shape = (_n_points // _nx, _nx)
+            else:
+                _grid_shape = (_n_points, 1)
         cropped_spectra, cropped_shape, cropped_point_indices = crop_grid(
-            current_map.spectra, current_map.shape, rows=slice(1, None)
+            _map_spectra, _grid_shape, rows=slice(1, None)
         )
         cropped_grid_extent = grid_extent_for_points(current_map, cropped_point_indices)
     else:
@@ -420,33 +443,49 @@ def _(
         shift_min, shift_max = 0.0, 4000.0
         default_band_low, default_band_high = 1000.0, 2000.0
         cropped_spectra = cropped_shape = cropped_point_indices = cropped_grid_extent = None
-
-    stored_band_window = get_band_window()
-    if not dataset.maps or stored_band_window is None:
-        current_band = (default_band_low, default_band_high)
-        if dataset.maps:
-            set_band_window(current_band)
-    else:
-        stored_band_low, stored_band_high = sorted(float(v) for v in stored_band_window)
-        stored_band_low = max(shift_min, min(shift_max, stored_band_low))
-        stored_band_high = max(shift_min, min(shift_max, stored_band_high))
-        current_band = (
-            (stored_band_low, stored_band_high)
-            if stored_band_low < stored_band_high
-            else (default_band_low, default_band_high)
-        )
-        if tuple(float(v) for v in stored_band_window) != current_band:
-            set_band_window(current_band)
     return (
         cropped_grid_extent,
         cropped_point_indices,
         cropped_shape,
         cropped_spectra,
-        current_band,
         current_map,
+        default_band_high,
+        default_band_low,
         shift_max,
         shift_min,
     )
+
+
+@app.cell(hide_code=True)
+def _(
+    dataset,
+    default_band_high,
+    default_band_low,
+    get_band_window,
+    set_band_window,
+    shift_max,
+    shift_min,
+):
+    # Keep the spectral window in a tiny state-only cell. This prevents
+    # spectral-window changes from rebuilding the map/cropped spectra objects,
+    # which would otherwise cascade into pre-processing and MCR-ALS.
+    _stored_band_window = get_band_window()
+    if not dataset.maps or _stored_band_window is None:
+        current_band = (default_band_low, default_band_high)
+        if dataset.maps:
+            set_band_window(current_band)
+    else:
+        _stored_band_low, _stored_band_high = sorted(float(v) for v in _stored_band_window)
+        _stored_band_low = max(shift_min, min(shift_max, _stored_band_low))
+        _stored_band_high = max(shift_min, min(shift_max, _stored_band_high))
+        current_band = (
+            (_stored_band_low, _stored_band_high)
+            if _stored_band_low < _stored_band_high
+            else (default_band_low, default_band_high)
+        )
+        if tuple(float(v) for v in _stored_band_window) != current_band:
+            set_band_window(current_band)
+    return (current_band,)
 
 
 @app.cell(hide_code=True)
@@ -552,25 +591,22 @@ def _(
     cropped_point_indices,
     cropped_spectra,
     current_map,
-    get_selected_indices,
     node_baseline,
     np,
     ramanrs,
     remove_range_checkbox,
     remove_range_slider,
 ):
+    # Expensive map pre-processing. Deliberately depends only on raw data and
+    # pre-processing controls; selections, spectral windows, opacity, colormaps,
+    # and MCR display controls must not trigger this cell.
     if current_map is None:
         pre_keep_mask = None
         viz_axis = viz_spectra = None
         cropped_index_lookup = {}
-        selected_indices = ()
-        selected_positions = []
-        selected_count = 0
-        selected_spectra = average_counts = None
-        selected_caption = None
     else:
         pre_raw_axis = np.asarray(current_map.raman_shift, dtype=float)
-        pre_raw_spectra = cropped_spectra.astype(float)
+        pre_raw_spectra = cropped_spectra.astype(float, copy=False)
         if remove_range_checkbox.value:
             remove_low, remove_high = sorted(float(v) for v in remove_range_slider.value)
             pre_keep_mask = (pre_raw_axis >= remove_low) & (pre_raw_axis <= remove_high)
@@ -589,13 +625,34 @@ def _(
             )
 
         cropped_index_lookup = {int(pi): pos for pos, pi in enumerate(cropped_point_indices)}
+    return cropped_index_lookup, pre_keep_mask, viz_axis, viz_spectra
+
+
+@app.cell(hide_code=True)
+def _(
+    cropped_index_lookup,
+    cropped_point_indices,
+    current_map,
+    get_selected_indices,
+    np,
+    viz_spectra,
+):
+    # Lightweight selection-dependent spectrum summary. Moving this out of the
+    # pre-processing cell makes lasso/point changes immediate.
+    if current_map is None or viz_spectra is None:
+        selected_indices = ()
+        selected_positions = []
+        selected_count = 0
+        selected_spectra = average_counts = None
+        selected_caption = None
+    else:
         raw_selected_indices = tuple(int(i) for i in get_selected_indices())
         selected_indices = tuple(
             i for i in raw_selected_indices if i in cropped_index_lookup
         ) or (int(cropped_point_indices[0]),)
         selected_positions = [cropped_index_lookup[i] for i in selected_indices]
         selected_count = len(selected_indices)
-        selected_spectra = viz_spectra[selected_positions].astype(float)
+        selected_spectra = viz_spectra[selected_positions].astype(float, copy=False)
         average_counts = selected_spectra.mean(axis=0)
         if selected_count == 1:
             _i0 = selected_indices[0]
@@ -605,15 +662,7 @@ def _(
             selected_caption = f"point {_i0} · row {_row} · col {_col} · x/y {_sx:.1f}, {_sy:.1f} µm"
         else:
             selected_caption = f"{selected_count} points averaged"
-    return (
-        average_counts,
-        pre_keep_mask,
-        selected_caption,
-        selected_count,
-        selected_spectra,
-        viz_axis,
-        viz_spectra,
-    )
+    return average_counts, selected_caption, selected_count, selected_spectra
 
 
 @app.cell(hide_code=True)
@@ -759,32 +808,56 @@ def _(
 
 @app.cell(hide_code=True)
 def _(
-    alpha_slider,
-    cmap_select,
-    cropped_grid_extent,
     cropped_shape,
     current_map,
-    interpolation_select,
     mcr_checkbox,
-    mcr_component_slider,
     mcr_k_slider,
     mcr_sparsity_slider,
-    mo,
-    np,
-    plot_map_overlay,
-    plt,
     ramanrs,
     viz_axis,
     viz_spectra,
 ):
-    if current_map is None:
+    # Expensive MCR-ALS computation. This cell is intentionally independent of
+    # opacity, colormap, interpolation, selected component, and spectral-window UI.
+    if current_map is None or not mcr_checkbox.value:
         mcr_result = None
-        mcr_panel = None
-    elif mcr_checkbox.value:
+    else:
         mcr_result = ramanrs.mcr_als(
-            viz_spectra, n_components=mcr_k_slider.value, n_iter=80,
-            spectral_sparsity=mcr_sparsity_slider.value, axis=viz_axis, shape=cropped_shape,
+            viz_spectra,
+            n_components=int(mcr_k_slider.value),
+            n_iter=80,
+            spectral_sparsity=float(mcr_sparsity_slider.value),
+            axis=viz_axis,
+            shape=cropped_shape,
         )
+    return (mcr_result,)
+
+
+@app.cell(hide_code=True)
+def _(
+    alpha_slider,
+    cmap_select,
+    cropped_grid_extent,
+    current_map,
+    interpolation_select,
+    mcr_checkbox,
+    mcr_component_slider,
+    mcr_result,
+    mo,
+    np,
+    plot_map_overlay,
+    plt,
+    viz_axis,
+):
+    # Lightweight MCR rendering. Display-only controls may rerun this cell, but
+    # they no longer rerun MCR-ALS itself.
+    if current_map is None:
+        mcr_panel = None
+    elif not mcr_checkbox.value:
+        mcr_panel = mo.md("_MCR-ALS disabled._")
+    elif mcr_result is None:
+        mcr_panel = mo.md("_MCR-ALS result is not available yet._")
+    else:
         mcr_component_index = int(np.clip(int(mcr_component_slider.value) - 1, 0, mcr_result.n_components - 1))
         mcr_overlay = mcr_result.heatmap(mcr_component_index, cmap=cmap_select.value)
         mcr_fig_map, mcr_ax_map = plot_map_overlay(
@@ -814,9 +887,6 @@ def _(
              mo.hstack([mcr_fig_map, mcr_fig_spec], widths=[1, 1], gap=1)],
             gap=0.6,
         )
-    else:
-        mcr_result = None
-        mcr_panel = mo.md("_MCR-ALS disabled._")
     return (mcr_panel,)
 
 
