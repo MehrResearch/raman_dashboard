@@ -136,6 +136,8 @@ def _():
 
     import ramanrs
 
+    mo._runtime.context.get_context().marimo_config["runtime"]["output_max_bytes"] = 25_000_000
+
     get_selected_indices, set_selected_indices = mo.state((0,))
     get_band_window, set_band_window = mo.state(None)
 
