@@ -9,17 +9,17 @@ def _notebook_path() -> Path:
 
 
 def _launch(command: str) -> int:
-    """Invoke ``marimo <command> --sandbox <notebook>`` forwarding extra args.
+    """Invoke ``marimo <command> --no-sandbox <notebook>`` forwarding extra args.
 
-    ``--sandbox`` runs the notebook in a venv built from its inline script
-    metadata; passing it explicitly skips marimo's confirmation prompt. Any
-    extra command-line arguments are forwarded (e.g. ``--port 2718``,
-    ``--headless``).
+    The package's own environment already has the notebook's dependencies, so
+    no sandbox is needed (and uv refuses to build one from inside its cache).
+    ``--no-sandbox`` also skips marimo's prompt. Any extra command-line
+    arguments are forwarded (e.g. ``--port 2718``, ``--headless``).
     """
     from marimo._cli.cli import main as marimo_main
 
     notebook = _notebook_path()
-    sys.argv = ["marimo", command, "--sandbox", str(notebook), *sys.argv[1:]]
+    sys.argv = ["marimo", command, "--no-sandbox", str(notebook), *sys.argv[1:]]
     return marimo_main()
 
 
