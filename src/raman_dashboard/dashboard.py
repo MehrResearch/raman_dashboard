@@ -4,6 +4,7 @@
 #     "matplotlib==3.10.9",
 #     "numpy==2.4.6",
 #     "seaborn==0.13.2",
+#     "raman-dashboard @ git+https://github.com/MehrResearch/raman_dashboard",
 # ]
 # requires-python = ">=3.13"
 # ///
@@ -22,7 +23,7 @@ def _(filepicker, mo, ramanrs):
         selected_file = filepicker.value[0].path
     else:
         _candidates = sorted(Path.cwd().glob("*.rs")) + sorted(
-            Path(__file__).resolve().parent.glob("*.rs")
+            Path(ramanrs.__file__).resolve().parent.glob("*.rs")
         )
         selected_file = _candidates[0]
     dataset = ramanrs.read(selected_file)
@@ -134,7 +135,7 @@ def _():
     from matplotlib import pyplot as plt
     import seaborn as sns
 
-    import ramanrs
+    from raman_dashboard import ramanrs
 
     mo._runtime.context.get_context().marimo_config["runtime"]["output_max_bytes"] = 25_000_000
 

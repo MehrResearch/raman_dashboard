@@ -11,15 +11,15 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Mehr Research" }]
 dependencies = [
-    "marimo>=0.9",
     "matplotlib>=3.8",
     "numpy>=1.26",
-    "seaborn>=0.13",
 ]
 
-[project.scripts]
-raman-dashboard = "raman_dashboard.cli:main"
-raman-dashboard-edit = "raman_dashboard.cli:edit"
+[dependency-groups]
+dev = [
+    "marimo",
+    "seaborn>=0.13",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/raman_dashboard"]

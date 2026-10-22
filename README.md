@@ -11,26 +11,15 @@ switches to a spectra view automatically.
 Download [uv](https://docs.astral.sh/uv/) then:
 
 ```bash
-# with uvx
-uvx --from git+https://github.com/MehrResearch/raman_dashboard raman-dashboard
+# run the app
+uvx marimo run --sandbox https://github.com/MehrResearch/raman_dashboard/blob/main/src/raman_dashboard/dashboard.py
+# edit the cells (changes are not saved back)
+uvx marimo edit --sandbox https://github.com/MehrResearch/raman_dashboard/blob/main/src/raman_dashboard/dashboard.py
 ```
 
-This opens the dashboard (`marimo run`) in your browser. A small sample map is
-bundled, so it loads to something immediately; use the file browser at the top to
-open your own `.rs` file.
-
-Extra arguments are forwarded to `marimo run`, e.g.:
-
-```bash
-uvx --from git+https://github.com/MehrResearch/raman_dashboard raman-dashboard --port 2718 --headless
-```
-
-To open it in the marimo **editor** instead (edit cells, tweak code), use the
-`raman-dashboard-edit` command:
-
-```bash
-uvx --from git+https://github.com/MehrResearch/raman_dashboard raman-dashboard-edit
-```
+This opens the dashboard in your browser. A small sample map is bundled, so it
+loads to something immediately; use the file browser at the top to open your own
+`.rs` file.
 
 ## What it does
 
@@ -49,8 +38,7 @@ uvx --from git+https://github.com/MehrResearch/raman_dashboard raman-dashboard-e
 ```bash
 git clone https://github.com/MehrResearch/raman_dashboard
 cd raman_dashboard
-uv run raman-dashboard            # run the app
-uv run marimo edit src/raman_dashboard/dashboard.py   # edit the notebook
+uv run marimo edit src/raman_dashboard/dashboard.py
 ```
 
 ## License
